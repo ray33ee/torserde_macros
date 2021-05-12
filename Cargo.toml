@@ -1,0 +1,15 @@
+[package]
+name = "torserde_macros"
+version = "0.0.0"
+authors = ["ray33ee <30669752+ray33ee@users.noreply.github.com>"]
+description = "A set of macros to allow structs and enums to derive Torserde"
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "1"
+proc-macro2 = "1.0"
+syn = "1.0.72"
+torserde = { path = "E:\\Software Projects\\IntelliJ\\torserde" }

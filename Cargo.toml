@@ -1,6 +1,6 @@
 [package]
 name = "torserde_macros"
-version = "0.0.0"
+version = "0.0.1"
 authors = ["ray33ee <30669752+ray33ee@users.noreply.github.com>"]
 description = "A set of macros to allow structs and enums to derive Torserde"
 edition = "2018"

@@ -17,12 +17,12 @@ pub fn torserde_derive_macro(input: proc_macro::TokenStream) -> proc_macro::Toke
 
     let expanded = quote! {
         impl torserde::TorSerde for #name {
-            fn bin_serialise_into<W: std::io::Write>(&self, mut stream: W) {
-                #serialiser
+            fn bin_serialise_into<W: std::io::Write>(&self, mut stream: W) -> torserde::Result<u32> {
+                Ok({#serialiser})
             }
 
-            fn bin_deserialise_from<R: std::io::Read>(mut stream: R) -> Self {
-                #deserialiser
+            fn bin_deserialise_from<R: std::io::Read>(mut stream: R) -> torserde::Result<Self> {
+                Ok({#deserialiser})
             }
 
             fn serialised_length(&self) -> u32 {
@@ -30,6 +30,8 @@ pub fn torserde_derive_macro(input: proc_macro::TokenStream) -> proc_macro::Toke
             }
         }
     };
+
+    println!("{}", expanded.to_string());
 
     proc_macro::TokenStream::from(expanded)
 
@@ -44,22 +46,22 @@ fn tor_serialise(data: &Data) -> TokenStream {
                 let recurse = fields.named.iter().map(|f| {
                     let name = &f.ident;
                     quote_spanned! {f.span()=>
-                        torserde::TorSerde::bin_serialise_into(&self.#name, std::borrow::BorrowMut::borrow_mut(& mut stream));
+                        torserde::TorSerde::bin_serialise_into(&self.#name, std::borrow::BorrowMut::borrow_mut(& mut stream))?
                     }
                 });
                 quote! {
-                    #(#recurse)*
+                    0 #( + #recurse)*
                 }
             }
             Fields::Unnamed(ref fields) => {
                 let recurse = fields.unnamed.iter().enumerate().map(|(i, f)| {
                     let index = Index::from(i);
                     quote_spanned! {f.span()=>
-                        torserde::TorSerde::bin_serialise_into(&self.#index, std::borrow::BorrowMut::borrow_mut(& mut stream));
+                        torserde::TorSerde::bin_serialise_into(&self.#index, std::borrow::BorrowMut::borrow_mut(& mut stream))?
                     }
                 });
                 quote! {
-                    #(#recurse)*
+                    0 #( + #recurse)*
                 }
             }
             Fields::Unit => {
@@ -87,9 +89,9 @@ fn tor_serialise(data: &Data) -> TokenStream {
                                 { #(#idents,)* }
                             },
                             quote! {
-                                (#discriminant as u8).bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream));
-                                #(#idents2.bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream));)*
-                            }
+                                    (#discriminant as u8).bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream))?
+                                    #( + #idents2.bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream))?)*
+                                }
                         )
                     }
                     Fields::Unnamed(ref unnamed) => {
@@ -107,8 +109,8 @@ fn tor_serialise(data: &Data) -> TokenStream {
                                 ( #(#idents,)* )
                             },
                             quote! {
-                                (#discriminant as u8).bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream));
-                                #(#idents2.bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream));)*
+                                (#discriminant as u8).bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream))?
+                                #( + #idents2.bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream))?)*
                             }
                         )
                     }
@@ -118,7 +120,7 @@ fn tor_serialise(data: &Data) -> TokenStream {
 
                             },
                             quote! {
-                                (#discriminant as u8).bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream));
+                                (#discriminant as u8).bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream))?
                             }
                         )
                     }
@@ -151,7 +153,7 @@ fn tor_deserialise(data: &Data) -> TokenStream {
                 let recurse = fields.named.iter().map(|f| {
                     let name = &f.ident;
                     quote_spanned! {f.span()=>
-                        #name: torserde::TorSerde::bin_deserialise_from(std::borrow::BorrowMut::borrow_mut(& mut stream)),
+                        #name: torserde::TorSerde::bin_deserialise_from(std::borrow::BorrowMut::borrow_mut(& mut stream))?,
                     }
                 });
                 quote! {
@@ -163,7 +165,7 @@ fn tor_deserialise(data: &Data) -> TokenStream {
             Fields::Unnamed(ref fields) => {
                 let recurse = fields.unnamed.iter().map(|f| {
                     quote_spanned! {f.span()=>
-                        torserde::TorSerde::bin_deserialise_from(std::borrow::BorrowMut::borrow_mut(& mut stream)),
+                        torserde::TorSerde::bin_deserialise_from(std::borrow::BorrowMut::borrow_mut(& mut stream))?,
                     }
                 });
                 quote! {
@@ -190,7 +192,7 @@ fn tor_deserialise(data: &Data) -> TokenStream {
                         });
 
                         quote! {
-                            { #(#idents: torserde::TorSerde::bin_deserialise_from(std::borrow::BorrowMut::borrow_mut(& mut stream)),)* }
+                            { #(#idents: torserde::TorSerde::bin_deserialise_from(std::borrow::BorrowMut::borrow_mut(& mut stream))?,)* }
                         }
 
                     }
@@ -199,7 +201,7 @@ fn tor_deserialise(data: &Data) -> TokenStream {
                         let idents = unnamed.unnamed.iter().map(|_| quote! {});
 
                         quote! {
-                            ( #(#idents torserde::TorSerde::bin_deserialise_from(std::borrow::BorrowMut::borrow_mut(& mut stream)), )* )
+                            ( #(#idents torserde::TorSerde::bin_deserialise_from(std::borrow::BorrowMut::borrow_mut(& mut stream))?, )* )
                         }
 
                     }
@@ -216,7 +218,7 @@ fn tor_deserialise(data: &Data) -> TokenStream {
             });
 
             quote! {
-                let discriminant = u8::bin_deserialise_from(std::borrow::BorrowMut::borrow_mut(& mut stream));
+                let discriminant = u8::bin_deserialise_from(std::borrow::BorrowMut::borrow_mut(& mut stream))?;
 
                 match discriminant {
                     #(#arms)*

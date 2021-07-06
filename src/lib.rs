@@ -2,7 +2,12 @@
 use proc_macro2::{TokenStream, Ident, Span};
 use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{parse_macro_input, DeriveInput, Data, Fields, Index};
+use syn::{parse_macro_input, DeriveInput, Data, Fields, Index, Attribute, Meta, NestedMeta};
+use syn::parse::Parser;
+
+struct TorserdeAttributes {
+    repr: Option<Ident>,
+}
 
 #[proc_macro_derive(Torserde)]
 pub fn torserde_derive_macro(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -11,9 +16,12 @@ pub fn torserde_derive_macro(input: proc_macro::TokenStream) -> proc_macro::Toke
 
     let name = input.ident;
 
-    let serialiser = tor_serialise(&input.data);
-    let deserialiser = tor_deserialise(&input.data);
-    let get_length = tor_get_length(&input.data);
+
+    let attributes = process_attributes(&input.attrs);
+
+    let serialiser = tor_serialise(&input.data, & attributes);
+    let deserialiser = tor_deserialise(&input.data, & attributes);
+    let get_length = tor_get_length(&input.data, & attributes);
 
     let expanded = quote! {
         impl torserde::TorSerde for #name {
@@ -31,15 +39,42 @@ pub fn torserde_derive_macro(input: proc_macro::TokenStream) -> proc_macro::Toke
         }
     };
 
-    println!("{}", expanded.to_string());
-
     proc_macro::TokenStream::from(expanded)
 
 }
 
-fn tor_serialise(data: &Data) -> TokenStream {
+fn process_attributes(attributes: & [Attribute]) -> TorserdeAttributes {
 
-    //todo: If we use repr to specify the length of the discriminant, update u8's to reflect this
+    let mut repr_ident = None;
+
+    for attribute in attributes {
+        if let Meta::List(meta_list) = attribute.parse_meta().unwrap() {
+            if let Some(ident) = meta_list.path.get_ident() {
+                if ident.to_string() == "repr" {
+                    if let Some(nested_meta) = meta_list.nested.first() {
+                        if let NestedMeta::Meta(meta) = nested_meta {
+                            if let Meta::Path(path) = meta {
+                                if let Some(ident) = path.get_ident() {
+                                    println!("ident: {:?}", ident.to_string());
+                                    repr_ident = Some(ident.clone())
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+        }
+    }
+
+    TorserdeAttributes {
+        repr: repr_ident,
+    }
+
+}
+
+fn tor_serialise(data: &Data, attributes: & TorserdeAttributes) -> TokenStream {
+
     match *data {
         Data::Struct(ref data) => match data.fields {
             Fields::Named(ref fields) => {
@@ -69,6 +104,9 @@ fn tor_serialise(data: &Data) -> TokenStream {
             }
         }
         Data::Enum(ref data) => {
+
+            let repr = attributes.repr.as_ref().unwrap().clone();
+
             let arms = data.variants.iter().map(|v| {
                 let enum_ident = &v.ident;
 
@@ -89,7 +127,7 @@ fn tor_serialise(data: &Data) -> TokenStream {
                                 { #(#idents,)* }
                             },
                             quote! {
-                                    (#discriminant as u8).bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream))?
+                                    (#discriminant as #repr).bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream))?
                                     #( + #idents2.bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream))?)*
                                 }
                         )
@@ -109,7 +147,7 @@ fn tor_serialise(data: &Data) -> TokenStream {
                                 ( #(#idents,)* )
                             },
                             quote! {
-                                (#discriminant as u8).bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream))?
+                                (#discriminant as #repr).bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream))?
                                 #( + #idents2.bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream))?)*
                             }
                         )
@@ -120,7 +158,7 @@ fn tor_serialise(data: &Data) -> TokenStream {
 
                             },
                             quote! {
-                                (#discriminant as u8).bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream))?
+                                (#discriminant as #repr).bin_serialise_into(std::borrow::BorrowMut::borrow_mut(& mut stream))?
                             }
                         )
                     }
@@ -146,7 +184,7 @@ fn tor_serialise(data: &Data) -> TokenStream {
 
 
 
-fn tor_deserialise(data: &Data) -> TokenStream {
+fn tor_deserialise(data: &Data, attributes: & TorserdeAttributes) -> TokenStream {
     match *data {
         Data::Struct(ref data) => match data.fields {
             Fields::Named(ref fields) => {
@@ -177,7 +215,11 @@ fn tor_deserialise(data: &Data) -> TokenStream {
             }
         }
         Data::Enum(ref data) => {
+
+            let repr = attributes.repr.as_ref().unwrap();
+
             let arms = data.variants.iter().map(|v| {
+
                 let enum_ident = &v.ident;
 
                 let discriminant = &v.discriminant.as_ref().unwrap().1;
@@ -218,11 +260,11 @@ fn tor_deserialise(data: &Data) -> TokenStream {
             });
 
             quote! {
-                let discriminant = u8::bin_deserialise_from(std::borrow::BorrowMut::borrow_mut(& mut stream))?;
+                let discriminant = #repr::bin_deserialise_from(std::borrow::BorrowMut::borrow_mut(& mut stream))?;
 
                 match discriminant {
                     #(#arms)*
-                    _ => { panic!("Invalid discriminant ({})", discriminant); }
+                    _ => { return Err(torserde::ErrorKind::BadDiscriminant(discriminant as u128)); }
                 }
             }
         }
@@ -234,7 +276,7 @@ fn tor_deserialise(data: &Data) -> TokenStream {
 
 
 
-fn tor_get_length(data: &Data) -> TokenStream {
+fn tor_get_length(data: &Data, attributes: & TorserdeAttributes) -> TokenStream {
     match *data {
         Data::Struct(ref data) => match data.fields {
             Fields::Named(ref fields) => {
@@ -264,6 +306,8 @@ fn tor_get_length(data: &Data) -> TokenStream {
             }
         }
         Data::Enum(ref data) => {
+            let repr = attributes.repr.as_ref().unwrap();
+
             let arms = data.variants.iter().map(|v| {
                 let enum_ident = &v.ident;
 
@@ -324,7 +368,7 @@ fn tor_get_length(data: &Data) -> TokenStream {
 
             //todo: If we use repr to specify the length of the discriminant, update 1 to reflect this
             quote! {
-                1 + match &self {
+                (0 as #repr).serialised_length() + match &self {
                     #(#arms)*
                 }
             }
